@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const db = require('../config/database');
+const supabase = require('../config/database');
 const { validateRegistration, checkValidation } = require('../utils/validators');
 const { encrypt } = require('../utils/encryption');
 const { verifyRecaptcha } = require('../utils/recaptcha');
@@ -49,32 +49,40 @@ router.post('/', validateRegistration, checkValidation, async (req, res) => {
       }
     }
 
-    // Check if email already exists
-    const [existingUsers] = await db.query(
-      'SELECT id FROM users WHERE email = ?',
-      [email]
-    );
+    const { data: existingUsers, error: checkError } = await supabase
+      .from('users')
+      .select('id')
+      .eq('email', email)
+      .maybeSingle();
 
-    if (existingUsers.length > 0) {
+    if (existingUsers) {
       return res.status(400).json({
         success: false,
         message: 'This email is already registered'
       });
     }
 
-    // Encrypt sensitive data
     const encryptedPhone = phone ? encrypt(phone) : null;
 
-    // Insert user into database
-    const [result] = await db.query(`
-      INSERT INTO users (full_name, email, phone, country, city, gender, age_group, interest, message)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `, [full_name, email, encryptedPhone, country, city, gender, age_group, interest, message]);
+    const { data: result, error: insertError } = await supabase
+      .from('users')
+      .insert({
+        full_name,
+        email,
+        phone: encryptedPhone,
+        interest
+      })
+      .select()
+      .single();
+
+    if (insertError) {
+      throw insertError;
+    }
 
     res.json({
       success: true,
       message: 'Thank you for registering! We will contact you soon.',
-      userId: result.insertId
+      userId: result.id
     });
 
   } catch (error) {

@@ -1,38 +1,36 @@
 const express = require('express');
 const router = express.Router();
-const db = require('../config/database');
+const supabase = require('../config/database');
 
 // Home/Landing page
 router.get('/', async (req, res) => {
   try {
-    // Get impact statistics - Updated for peace movement
-    const [projects] = await db.query(`
-      SELECT 
-        COUNT(*) as total_projects,
-        COALESCE(SUM(beneficiaries), 0) as total_beneficiaries,
-        COUNT(CASE WHEN status = 'Active' THEN 1 END) as active_projects
-      FROM impact_projects
-    `);
-    
-    // Get user statistics for Peace Ambassadors
-    const [userStats] = await db.query(`
-      SELECT 
-        COUNT(*) as total_members,
-        COUNT(CASE WHEN interest = 'Peace Ambassador' THEN 1 END) as peace_ambassadors,
-        COUNT(CASE WHEN interest = 'Community Member' THEN 1 END) as community_members
-      FROM users
-    `);
+    const { data: projects, error: projectsError } = await supabase
+      .from('impact_projects')
+      .select('*');
 
-    // Get recent projects
-    const [recentProjects] = await db.query(`
-      SELECT * FROM impact_projects 
-      ORDER BY created_at DESC 
-      LIMIT 3
-    `);
+    const { data: users, error: usersError } = await supabase
+      .from('users')
+      .select('*');
 
-    const projectStats = projects[0] || { total_projects: 0, total_beneficiaries: 0, active_projects: 0 };
-    const userStatsData = userStats[0] || { total_members: 0, peace_ambassadors: 0, community_members: 0 };
-    
+    const { data: recentProjects, error: recentError } = await supabase
+      .from('impact_projects')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(3);
+
+    const projectStats = {
+      total_projects: projects?.length || 0,
+      total_beneficiaries: projects?.reduce((sum, p) => sum + (p.beneficiaries || 0), 0) || 0,
+      active_projects: projects?.filter(p => p.status === 'Active').length || 0
+    };
+
+    const userStatsData = {
+      total_members: users?.length || 0,
+      peace_ambassadors: users?.filter(u => u.interest === 'Peace Ambassador').length || 0,
+      community_members: users?.filter(u => u.interest === 'Community Member').length || 0
+    };
+
     res.render('index', {
       title: 'Friends of Uganda - Our nation, Our shared responsibility',
       page: 'home',
@@ -84,12 +82,11 @@ router.get('/team', (req, res) => {
 // Community page
 router.get('/community', async (req, res) => {
   try {
-    // Get recent projects for community updates
-    const [projects] = await db.query(`
-      SELECT * FROM impact_projects 
-      ORDER BY created_at DESC 
-      LIMIT 6
-    `);
+    const { data: projects, error } = await supabase
+      .from('impact_projects')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(6);
 
     res.render('community', {
       title: 'Community - Friends of Uganda',
@@ -109,39 +106,37 @@ router.get('/community', async (req, res) => {
 // Our Impact page
 router.get('/impact', async (req, res) => {
   try {
-    // Get all projects
-    const [projects] = await db.query(`
-      SELECT * FROM impact_projects 
-      ORDER BY created_at DESC
-    `);
+    const { data: projects, error } = await supabase
+      .from('impact_projects')
+      .select('*')
+      .order('created_at', { ascending: false });
 
-    // Get statistics by location
-    const [locationStats] = await db.query(`
-      SELECT 
-        location,
-        COUNT(*) as project_count,
-        SUM(beneficiaries) as total_beneficiaries
-      FROM impact_projects
-      GROUP BY location
-      ORDER BY total_beneficiaries DESC
-    `);
+    const locationStatsMap = {};
+    projects?.forEach(p => {
+      if (p.location) {
+        if (!locationStatsMap[p.location]) {
+          locationStatsMap[p.location] = { location: p.location, project_count: 0, total_beneficiaries: 0 };
+        }
+        locationStatsMap[p.location].project_count++;
+        locationStatsMap[p.location].total_beneficiaries += p.beneficiaries || 0;
+      }
+    });
 
-    // Calculate total impact
-    const [totals] = await db.query(`
-      SELECT 
-        COUNT(*) as total_projects,
-        SUM(beneficiaries) as total_beneficiaries,
-        COUNT(CASE WHEN status = 'Active' THEN 1 END) as active_projects,
-        COUNT(CASE WHEN status = 'Completed' THEN 1 END) as completed_projects
-      FROM impact_projects
-    `);
+    const locationStats = Object.values(locationStatsMap).sort((a, b) => b.total_beneficiaries - a.total_beneficiaries);
+
+    const totals = {
+      total_projects: projects?.length || 0,
+      total_beneficiaries: projects?.reduce((sum, p) => sum + (p.beneficiaries || 0), 0) || 0,
+      active_projects: projects?.filter(p => p.status === 'Active').length || 0,
+      completed_projects: projects?.filter(p => p.status === 'Completed').length || 0
+    };
 
     res.render('impact', {
       title: 'Our Impact - Friends of Uganda',
       page: 'impact',
       projects: projects || [],
       locationStats: locationStats || [],
-      totals: totals[0] || { total_projects: 0, total_beneficiaries: 0, active_projects: 0, completed_projects: 0 }
+      totals: totals
     });
   } catch (error) {
     console.error('Error loading impact page:', error);
